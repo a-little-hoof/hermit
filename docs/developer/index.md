@@ -61,6 +61,11 @@ For changes to interactive figures, inspect desktop and narrow layouts plus keyb
 component contracts are described in [Adapter](../framework/adapter.md), [Evolver](../framework/evolver.md), and
 [Trainer](../framework/trainer.md).
 
+## Research plans
+
+[Streaming video harness evolution](streaming-video-harness-evolution-plan.md) proposes a shared skill for
+interactive video prompt transitions, with fixed evaluators, task splits, baselines, and implementation milestones.
+
 ## Proposing a change
 
 Describe the user-visible behavior, the affected contract, how you verified it, and any environment requirements.

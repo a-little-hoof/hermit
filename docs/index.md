@@ -89,6 +89,7 @@ recipes/lean-collaboration
 developer/index
 developer/reproducing-a-method
 developer/service-design
+developer/streaming-video-harness-evolution-plan
 tutorials/custom-evolver
 framework/custom-evolver
 framework/adapter
