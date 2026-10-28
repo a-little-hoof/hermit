@@ -55,6 +55,12 @@ class PromptSchedule:
         return self.active
 
 
+def offline_plan(schedule, version, query, root):
+    """Finish planning before the caller advances to the next generation block."""
+    response = query(root)
+    return response, schedule.install(version, response["steps"])
+
+
 def _observations(pipeline, latents, current_start: int, case: Path, version: int):
     import torch
     from PIL import Image
@@ -81,6 +87,9 @@ def controlled_inference(pipeline, noise, task, case, settings=None, skill_path=
 
     batch_size, length, channels, height, width = noise.shape
     block = pipeline.num_frame_per_block
+    planning_mode = settings.get("planning_mode", "async") if settings else "identity"
+    if planning_mode not in ("async", "offline", "identity"):
+        raise ValueError(f"unknown planning_mode: {planning_mode}")
     output = torch.zeros_like(noise)
     pipeline._initialize_kv_cache(batch_size, dtype=noise.dtype, device=noise.device,
                                   kv_cache_size_override=pipeline.local_attn_size * pipeline.frame_seq_length)
@@ -125,7 +134,13 @@ def controlled_inference(pipeline, noise, task, case, settings=None, skill_path=
                                "active_prompt": active, "frames": frames,
                                "budget_chunks": min(int(settings.get("budget_chunks", 4)), (length-current_start)//block)}
                     (root / "request.json").write_text(json.dumps(request, ensure_ascii=False, indent=2) + "\n")
-                    pending.append((version, executor.submit(query, root)))
+                    if planning_mode == "offline":
+                        response, applied = offline_plan(schedule, version, query, root)
+                        trace.append({"event": "plan_returned", "request_id": version, "accepted": applied,
+                                      "planning_mode": "offline", "video_time_s": pixel_time(current_start),
+                                      "response": response, "wall_s": time.perf_counter() - started})
+                    else:
+                        pending.append((version, executor.submit(query, root)))
                 event_index += 1
             for version, future in list(pending):
                 if not future.done():

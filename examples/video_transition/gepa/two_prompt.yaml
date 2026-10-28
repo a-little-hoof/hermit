@@ -1,0 +1,78 @@
+data:
+  tasks: ../../../.demo/video-transition/two-prompt-offline/data/tasks.jsonl
+  train: ../../../.demo/video-transition/two-prompt-offline/data/train.txt
+  val: ../../../.demo/video-transition/two-prompt-offline/data/val.txt
+  test: ../../../.demo/video-transition/two-prompt-offline/data/test.txt
+  step_size: 1
+  shuffle: false
+task_info: ../utils/task-info-two-prompt
+template: adapter
+agent:
+  name: ../utils/pipeline.py:run
+  concurrency: 1
+  params:
+    runtime_config: ../runtime.two_prompt.local.json
+    generation_timeout_s: 1800
+judge:
+  path: ../utils/judge.py
+evolver:
+  name: gepa
+  params:
+    files:
+    - skills/transition/SKILL.md
+    max_tokens: 4096
+    trace_chars: 16000
+    reflection_prompt_template: 'Improve one shared SKILL.md for a frozen streaming
+      video transition controller.
+
+      The same skill must generalize across user instruction streams and observed
+      video states.
+
+      Current complete skill document:
+
+      <curr_param>
+
+      Training executions and evaluator feedback:
+
+      <side_info>
+
+      Revise general observation, preparation, intent preservation, and chunk-allocation
+      rules.
+
+      Preserve the YAML frontmatter, including name and description, and the complete
+      Markdown document.
+
+      Do not copy task captions, source row identifiers, seeds, or expected answers
+      into the skill.
+
+      Do not change user goals, evaluator rules, model settings, or executable code.
+
+      Return only the complete revised skill inside a single Markdown code block.
+
+      '
+llm:
+  base_url: https://api.fireworks.ai/inference/v1
+  model: accounts/fireworks/models/glm-5p3
+  api_key_env: FIREWORKS_API_KEY
+  timeout: 120
+  extra_body:
+    reasoning_effort: low
+sandbox:
+  enabled: false
+  network: none
+  env: []
+trainer:
+  run_name: video-transition-two-prompt
+  output_dir: ../../../.demo/video-transition/two-prompt-offline/hermit-runs
+  epochs: 4
+  resume_mode: auto
+  save_freq:
+    steps: 1
+    epochs: 1
+  budget:
+    usd: null
+    tokens: null
+    hours: null
+  call_timeout_min: 45
+eval:
+  repeats: 1

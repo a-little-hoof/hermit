@@ -7,7 +7,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 from examples.video_transition.utils.controller import plan, validate_plan
 from examples.video_transition.utils.evaluate_video import evaluate_metric, validate_judgments
-from examples.video_transition.utils.streaming import PromptSchedule
+from examples.video_transition.utils.streaming import PromptSchedule, offline_plan
 
 
 @dataclass
@@ -84,3 +84,19 @@ def test_new_instruction_cancels_old_suffix_and_rejects_stale_plan():
     assert schedule.next_prompt()=='bridge two'
     assert schedule.next_prompt()=='target two'
     assert schedule.next_prompt()=='target two'
+
+
+def test_offline_plan_finishes_before_generation_can_advance():
+    schedule=PromptSchedule('sitting')
+    version=schedule.request('celebrating')
+    order=[]
+
+    def query(root):
+        assert schedule.pending and schedule.active=='sitting'
+        order.append('planning finished')
+        return {'steps':[{'prompt':'puts cards down','duration_chunks':1}]}
+    response,accepted=offline_plan(schedule,version,query,None)
+    assert accepted and response['steps']
+    order.append(schedule.next_prompt())
+    order.append(schedule.next_prompt())
+    assert order==['planning finished','puts cards down','celebrating']

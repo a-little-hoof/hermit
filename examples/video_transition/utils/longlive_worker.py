@@ -106,7 +106,8 @@ def main():
                          ("longlive_worker.py", "streaming.py", "controller.py", "remote.py", "protocol.py", "artifacts.py")}}
     if args.mode == "controller":
         identity.update(skill=args.skill.read_text(), controller=settings["controller"],
-                        sampling=settings.get("controller_sampling"), budget_chunks=settings.get("budget_chunks", 4))
+                        sampling=settings.get("controller_sampling"), budget_chunks=settings.get("budget_chunks", 4),
+                        planning_mode=settings.get("planning_mode", "async"))
     generation_id = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     pending = [task for task in tasks if not prepare_case(destination / task["id"], task, args.mode,
                                                           generation_id, args.save_latents, args.resume)]
@@ -176,6 +177,7 @@ def main():
         "inference": ("official InteractiveCausalInferencePipeline.inference" if args.mode == "baseline"
                       else "causal controller loop adapted from official inference"),
         "mode": args.mode,
+        "planning_mode": settings.get("planning_mode", "async") if args.mode == "controller" else "raw",
         "gpu": torch.cuda.get_device_name(), "torch": torch.__version__, "peft": peft.__version__,
         "base_checkpoint": str(args.base_checkpoint), "lora_checkpoint": str(args.lora_checkpoint),
         "lora_tensor_count": lora_count, "config": OmegaConf.to_container(config),
@@ -226,6 +228,7 @@ def main():
         temporary_video.replace(video_path)
         manifest = {
             "status": "error" if control_errors else "complete", "mode": args.mode, "task": task,
+            "planning_mode": provenance["planning_mode"],
             "video_path": str(video_path), "frames_shape": shape, "fps": FPS,
             "duration_s": shape[0] / FPS, "latent_count": latent_count, "switches": switches,
             "generation_and_decode_s": generation_s, "total_s": time.perf_counter() - task_start,

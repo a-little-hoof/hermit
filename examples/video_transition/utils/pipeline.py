@@ -34,6 +34,7 @@ def run(task: dict, adapter: Path | None, *, params: dict, base: Path) -> RunOut
         skill_path = Path(adapter) / "skills/transition/SKILL.md"
         skill = skill_path.read_text()
     identity = {"task": task, "mode": mode, "skill": skill,
+                "planning_mode": settings.get("planning_mode", "async"),
                 "generator": settings["generator"], "controller": settings.get("controller"),
                 "controller_sampling": settings.get("controller_sampling"),
                 "budget_chunks": settings.get("budget_chunks", 4),

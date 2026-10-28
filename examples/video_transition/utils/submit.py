@@ -114,7 +114,7 @@ def freeze(args, runtime: Path, settings: dict) -> tuple[Path, dict]:
             shutil.copy2(source, target)
             config["data"][key] = str(target)
         info = run / "source/task-info"
-        shutil.copytree(TASK_ROOT / "utils/task-info", info)
+        shutil.copytree((config_path.parent / config["task_info"]).resolve(), info)
         config["task_info"] = str(info)
         config["template"] = str(adapter)
         config["agent"]["name"] = str(utils / "pipeline.py") + ":run"

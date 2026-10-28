@@ -8,6 +8,45 @@ The generator weights, controller model, scheduler, and evaluator remain fixed d
 The [research plan](../../docs/developer/streaming-video-harness-evolution-plan.md) describes the intended experiments.
 The initial four-case pilot checks the integration; it does not establish a generalization result.
 
+## Current experiment: one prompt pair, offline
+
+The first focused experiment uses the first two prompts from official source row 02: a poker player grips his
+cards tensely, then flicks them onto the table and leans back in celebration. Each video is 20 seconds long and
+the user instruction changes at 10 seconds. At that boundary, `planning_mode: offline` pauses generation until
+the controller has observed preceding frames and returned its transition plan. API latency does not advance
+video time. The generator then executes the plan and restores the original second user prompt.
+
+```bash
+python examples/video_transition/utils/prepare_two_prompt.py
+python examples/video_transition/utils/with_runtime.py \
+  --runtime examples/video_transition/runtime.two_prompt.local.json \
+  check --config examples/video_transition/gepa/two_prompt.yaml --no-probe
+python examples/video_transition/utils/submit.py \
+  --runtime examples/video_transition/runtime.two_prompt.local.json \
+  --mode controller \
+  --tasks .demo/video-transition/two-prompt-offline/data/tasks.jsonl \
+  --ids-file .demo/video-transition/two-prompt-offline/data/train.txt
+```
+
+Preparation reuses the verified seed-0 raw baseline from the earlier pilot and preserves its provenance. It
+creates a separate experiment directory and private runtime settings. The evaluator uses Fireworks
+[JSON Schema output constraints](https://docs.fireworks.ai/structured-responses/structured-response-formatting)
+to require exactly ten binary `judgments` plus `sum`; client validation still checks their consistency. This
+sampling configuration has a separate evaluation protocol label.
+
+`gepa/two_prompt.yaml` runs **four epochs / four training steps**. Training, validation, and final comparison use
+seeds 0, 1, and 2 of the same pair. These are seed holdouts for debugging one pair; they do not test unseen-prompt
+generalization. The original full-stream splits remain separate. After inspecting initial generation and scores:
+
+```bash
+python examples/video_transition/utils/submit.py \
+  --runtime examples/video_transition/runtime.two_prompt.local.json \
+  --mode evolve --gepa-config examples/video_transition/gepa/two_prompt.yaml \
+  --time 24:00:00
+```
+
+The same step, video, judgment, and Slurm resume mechanisms below apply to the offline experiment.
+
 ## Model services and environments
 
 Use Hermit's Python 3.11+ environment for preparation, the controller API client, evaluation, and GEPA.

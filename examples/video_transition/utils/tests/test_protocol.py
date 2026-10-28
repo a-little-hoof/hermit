@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 from examples.video_transition.utils.prepare import prepare
 from examples.video_transition.utils.protocol import latent_boundary, metric_times, pixel_time, validate_task
 from examples.video_transition.utils.longlive_worker import source_revision
+from examples.video_transition.utils.prepare_two_prompt import prepare_pair
 
 
 def test_causal_decode_timing_and_chunk_quantization():
@@ -67,3 +68,14 @@ def test_source_revision_does_not_require_git_binary(tmp_path):
     (git/'refs/heads/main').unlink()
     (git/'packed-refs').write_text(sha+' refs/heads/main\n')
     assert source_revision(source)==sha
+
+
+def test_two_prompt_debugging_split_preserves_pair_and_separates_seeds(tmp_path):
+    task={"id":"example-pair","events":[{"time_s":0,"prompt":"holds cards"},
+          {"time_s":10,"prompt":"celebrates"}],"duration_s":20,"seed":0}
+    result=prepare_pair(task,tmp_path)
+    rows=[json.loads(line) for line in (tmp_path/'tasks.jsonl').read_text().splitlines()]
+    assert [row['seed'] for row in rows]==[0,1,2]
+    assert all(row['events']==task['events'] for row in rows)
+    assert len(set(result['splits'].values()))==3
+    assert task['seed']==0 and task['id']=='example-pair'
