@@ -1,0 +1,15 @@
+template:
+  id: video-transition
+  version: "0.1"
+  contract: "1"
+  name: Shared streaming video transition controller
+exports:
+  context: ADAPTER.md
+  skills: skills
+structure:
+  learnable:
+    - path: skills/transition/SKILL.md
+      format: {text: true, max_bytes: 24000, frontmatter: [name, description]}
+  fixed:
+    - ADAPTER.md
+    - EVOLVER.md

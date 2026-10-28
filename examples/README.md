@@ -38,6 +38,7 @@ These show one part of the framework and report no number.
 | Folder | What it shows |
 |---|---|
 | [`lean_swarm/`](lean_swarm/) | Check and deploy a finished adapter: five Codex agents prove one formal-conjectures theorem together; no training config |
+| [`video_transition/`](video_transition/) | Evolve a shared prompt-planning skill for frozen LongLive streaming generation, with a fixed eight-metric vision evaluator; integration pilot |
 | [`docs/_examples/first_training/`](../docs/_examples/first_training/) | The whole loop offline, with a scripted learner and no model ([Quick Start](../docs/get-started/quickstart.md)) |
 | [`docs/_examples/first_model/`](../docs/_examples/first_model/) | A first training with a real model, on included data, without benchmark assets ([First real-model training](../docs/get-started/first-model.md)) |
 

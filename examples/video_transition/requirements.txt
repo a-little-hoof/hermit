@@ -1,0 +1,5 @@
+# Hermit orchestration and video evaluation; the generator uses a separate CUDA environment.
+av>=13.1
+Pillow>=10
+numpy>=1.26
+huggingface_hub>=0.24

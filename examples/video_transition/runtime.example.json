@@ -1,0 +1,42 @@
+{
+  "secrets_file": "~/.config/hermit/video_transition.env",
+  "learner": {
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "model": "accounts/fireworks/models/glm-5p3",
+    "api_key_env": "FIREWORKS_API_KEY",
+    "timeout": 120
+  },
+  "controller": {
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "model": "accounts/fireworks/models/glm-5p3-flash",
+    "api_key_env": "FIREWORKS_API_KEY",
+    "timeout": 120
+  },
+  "evaluator": {
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "model": "accounts/fireworks/models/glm-5p3-flash",
+    "api_key_env": "FIREWORKS_API_KEY",
+    "timeout": 120
+  },
+  "controller_sampling": {
+    "temperature": 0.0, "max_tokens": 4096,
+    "reasoning_effort": "low", "response_format": {"type": "json_object"}
+  },
+  "evaluator_sampling": {
+    "temperature": 0.0, "max_tokens": 4096,
+    "reasoning_effort": "low", "response_format": {"type": "json_object"}
+  },
+  "budget_chunks": 4,
+  "rubrics_path": "<absolute-path-to-generated-rubrics.json>",
+  "baseline_root": "<absolute-path-to-baseline-run>",
+  "orchestrator_python": "<hermit-python-3.11-or-newer>",
+  "run_root": "<absolute-path-for-generated-runs>",
+  "evaluator_protocol": "segue-table12-glm5p3-flash-low-json-pilot-v1",
+  "generator": {
+    "python": "<longlive-cuda-environment-python>",
+    "source": "<official-longlive-1.0-source-directory>",
+    "models": "<wan-2.1-t2v-1.3b-directory>",
+    "base_checkpoint": "<longlive-base.pt>",
+    "lora_checkpoint": "<longlive-lora.pt>"
+  }
+}
