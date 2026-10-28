@@ -39,15 +39,20 @@ def wall_seconds(value: str) -> int:
 
 def script_text(run: Path, settings: dict, mode: str, resources: dict, auto_resume: bool) -> str:
     seconds = wall_seconds(resources["time"])
+    if resources.get("time_min") and wall_seconds(resources["time_min"]) > seconds:
+        raise ValueError("--time-min cannot exceed --time")
     lines = ["#!/bin/bash", f"#SBATCH --partition={resources['partition']}",
              f"#SBATCH --mem={resources['mem']}", f"#SBATCH --cpus-per-task={resources['cpus']}",
              f"#SBATCH --time={resources['time']}", f"#SBATCH --job-name=hermit-video-{mode}",
              f"#SBATCH --output={run}/slurm-%j.log", "#SBATCH --open-mode=append"]
+    if resources.get("time_min"):
+        lines.append(f"#SBATCH --time-min={resources['time_min']}")
     for field in ("gres", "account"):
         if resources.get(field):
             lines.append(f"#SBATCH --{field}={resources[field]}")
     if auto_resume:
-        lines += ["#SBATCH --requeue", f"#SBATCH --signal=B:USR1@{min(120, max(1, seconds // 4))}"]
+        minimum_seconds = wall_seconds(resources.get("time_min") or resources["time"])
+        lines += ["#SBATCH --requeue", f"#SBATCH --signal=B:USR1@{min(120, max(1, minimum_seconds // 4))}"]
     lines += ["set -euo pipefail", "unset LD_PRELOAD", "export PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1",
               "export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1 TOKENIZERS_PARALLELISM=false WANDB_MODE=disabled",
               f"export OMP_NUM_THREADS={resources['cpus']} TORCHINDUCTOR_COMPILE_THREADS=2",
@@ -174,6 +179,7 @@ def freeze(args, runtime: Path, settings: dict) -> tuple[Path, dict]:
     resources = {"gres": None if mode == "score" else (args.gres or slurm.get("gres")),
                  "account": args.account or slurm.get("account"), "partition": args.partition,
                  "time": args.time or ("24:00:00" if mode == "evolve" else "00:20:00"),
+                 "time_min": args.time_min,
                  "mem": args.mem or ("8G" if mode == "score" else "60G"),
                  "cpus": args.cpus or (2 if mode == "score" else 8)}
     if mode != "score" and not resources["gres"]:
@@ -192,7 +198,8 @@ def freeze(args, runtime: Path, settings: dict) -> tuple[Path, dict]:
     return run, plan
 
 
-def submit_run(run: Path, plan: dict, dependency: str | None, metadata_root: Path) -> dict:
+def submit_run(run: Path, plan: dict, dependency: str | None, metadata_root: Path,
+               time_min: str | None = None) -> dict:
     with (run / ".submit.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         prior = json.loads((run / "job.json").read_text()) if (run / "job.json").exists() else None
@@ -202,22 +209,33 @@ def submit_run(run: Path, plan: dict, dependency: str | None, metadata_root: Pat
             if str(prior["job_id"]) in result.stdout.split():
                 raise ValueError(f"job {prior['job_id']} is already pending or active; do not submit a duplicate")
         settings = json.loads((run / "runtime.json").read_text())
+        allocation = run / "allocation.json"
+        saved_policy = json.loads(allocation.read_text()) if allocation.exists() else {}
+        minimum = time_min or saved_policy.get("time_min") or plan["resources"].get("time_min")
+        if minimum and wall_seconds(minimum) > wall_seconds(plan["resources"]["time"]):
+            raise ValueError("--time-min cannot exceed the frozen maximum allocation time")
         env = os.environ.copy()
         for role in ("learner", "controller", "evaluator"):
             name = settings.get(role, {}).get("api_key_env")
             if name:
                 env.pop(name, None)
         command = ["sbatch", "--parsable", "--kill-on-invalid-dep=yes"]
+        if minimum:
+            command.append(f"--time-min={minimum}")
+            if plan["auto_resume"]:
+                command.append(f"--signal=B:USR1@{min(120, max(1, wall_seconds(minimum) // 4))}")
         if dependency:
             command.append(f"--dependency={dependency}")
         result = subprocess.run([*command, str(run / "run.sbatch")], text=True, capture_output=True, env=env, check=True)
         record = {"job_id": result.stdout.strip().split(";")[0], "mode": plan["mode"], "run_dir": str(run),
                   "script": str(run / "run.sbatch"), "status": "submitted", "metadata_root": str(metadata_root),
-                  "resources": plan["resources"], "auto_resume": plan["auto_resume"],
+                  "resources": {**plan["resources"], "time_min": minimum}, "auto_resume": plan["auto_resume"],
                   "previous_job_id": prior["job_id"] if prior else None}
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         atomic_json(run / "submissions" / f"{stamp}.json", record)
         atomic_json(run / "job.json", record)
+        if minimum:
+            atomic_json(allocation, {"time_min": minimum})
         atomic_json(metadata_root / f"latest-{plan['mode']}.json", record)
         return record
 
@@ -236,6 +254,7 @@ def main(argv=None):
     parser.add_argument("--mem")
     parser.add_argument("--cpus", type=int)
     parser.add_argument("--time")
+    parser.add_argument("--time-min", help="allow backfill to shorten an allocation to at least HH:MM:SS")
     parser.add_argument("--account")
     parser.add_argument("--partition", default="commons")
     parser.add_argument("--dependency")
@@ -246,9 +265,11 @@ def main(argv=None):
     parser.add_argument("--no-auto-resume", action="store_true")
     args = parser.parse_args(argv)
     if args.resume and any((args.runtime, args.time, args.gres, args.mem, args.cpus, args.account, args.no_auto_resume)):
-        parser.error("--resume uses frozen settings and resources; pass only its run directory and optional --dependency")
+        parser.error("--resume uses frozen settings; only --dependency and --time-min can be supplied with its run directory")
     if args.time:
         wall_seconds(args.time)
+    if args.time_min:
+        wall_seconds(args.time_min)
     if args.resume:
         run = args.resume.expanduser().resolve()
         plan = json.loads((run / "plan.json").read_text())
@@ -266,7 +287,7 @@ def main(argv=None):
         settings = json.loads(runtime.read_text())
         metadata_root = Path(settings["run_root"]).parent
         run, plan = freeze(args, runtime, settings)
-    record = submit_run(run, plan, args.dependency, metadata_root)
+    record = submit_run(run, plan, args.dependency, metadata_root, time_min=args.time_min)
     if not args.resume and args.mode == "baseline":
         settings = json.loads(runtime.read_text())
         settings["baseline_root"] = str(run)

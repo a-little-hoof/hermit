@@ -189,6 +189,11 @@ with the same experiment directory. A user cancellation does not trigger this ha
 stop the job for inspection rather than creating an endless retry loop. Use `--no-auto-resume` to disable the
 time-limit handler for a new experiment.
 
+To use shorter scheduling gaps, add `--time-min 00:30:00` alongside `--time 24:00:00`. Slurm's
+[backfill scheduler](https://slurm.schedmd.com/sbatch.html#OPT_time-min) may then assign a shorter allocation of at
+least 30 minutes. The job immediately runs the experiment; its time warning and checkpoint recovery still apply.
+An earlier start depends on available resources and queue priority.
+
 Recovery uses several completion boundaries:
 
 - **Training:** Hermit restores the last committed step's adapter, GEPA candidate pool, progress, and spending.
@@ -214,6 +219,9 @@ changed frozen files and duplicate submission of an already pending or active jo
 `submissions/` records manual submissions and `job-complete.json` appears only after all stages succeed.
 API spending after the last committed step can be absent from Hermit's restored budget; saved response usage
 remains available in the reflection and evaluation caches.
+The scheduling-only `--time-min` option is also accepted with `--resume` and saved in `allocation.json`, outside
+the immutable experiment snapshot. Later manual submissions reuse that minimum while preserving the original
+maximum allocation time and training settings.
 
 The generator is a separate process for each uncached Hermit task. This pilot favors a simple verifiable boundary;
 a persistent generator service can reduce model reload overhead later. Vision-judge calls and GPU time are recorded

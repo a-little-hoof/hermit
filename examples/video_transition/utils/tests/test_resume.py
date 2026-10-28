@@ -131,6 +131,33 @@ def test_manual_resume_refuses_an_active_job(tmp_path, monkeypatch):
     assert len(calls)==1 and calls[0][0]=='squeue'
 
 
+def test_resume_keeps_backfill_minimum_without_changing_frozen_maximum(tmp_path, monkeypatch):
+    atomic_json(tmp_path/'runtime.json',{})
+    atomic_json(tmp_path/'allocation.json',{'time_min':'00:30:00'})
+    plan={'mode':'evolve','resources':{'time':'24:00:00'},'auto_resume':True}
+    commands=[]
+
+    def submitted(command,**kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command,0,stdout='124\n',stderr='')
+    monkeypatch.setattr(subprocess,'run',submitted)
+    record=submit_run(tmp_path,plan,None,tmp_path/'metadata')
+    assert '--time-min=00:30:00' in commands[0]
+    assert record['resources']['time']=='24:00:00'
+    assert record['resources']['time_min']=='00:30:00'
+    assert plan['resources']=={'time':'24:00:00'}
+
+
+def test_backfill_minimum_is_validated_and_rendered(tmp_path):
+    settings={'orchestrator_python':sys.executable,'generator':{}}
+    resources={'time':'24:00:00','time_min':'00:30:00','partition':'commons','mem':'1G','cpus':1}
+    script=script_text(tmp_path,settings,'evolve',resources,True)
+    assert '#SBATCH --time-min=00:30:00' in script and '#SBATCH --requeue' in script
+    resources['time']='00:20:00'
+    with pytest.raises(ValueError,match='cannot exceed'):
+        script_text(tmp_path,settings,'evolve',resources,True)
+
+
 def test_24_hour_boundary_and_slurm_warning_requeue(tmp_path):
     assert wall_seconds("24:00:00") == wall_seconds("1-00:00:00") == 86400
     for invalid in ("24:00:01", "2-00:00:00", "00:00:00", "01:99:00", "bad"):
