@@ -41,6 +41,8 @@ from environment variables or a repository-external `secrets_file` with mode 600
 The CUDA worker requires the official LongLive source, Wan2.1-T2V-1.3B assets, `longlive_base.pt`, and `lora.pt`.
 If the source is a checkout of the current LongLive monorepo, point `generator.source` to `LongLive1.0/`.
 Set any required CUDA library paths in `generator.environment`. All runtime paths are machine-specific.
+GEPA also needs working `git` and `tar` executables on the compute node. If the node image lacks Git, supply a
+compatible binary and local-fetch helpers through `generator.environment.PATH` and `GIT_EXEC_PATH`.
 
 ## Prepare official data and evaluation rules
 
@@ -75,6 +77,8 @@ python examples/video_transition/utils/with_runtime.py \
 The wrapper loads private credentials without placing their values in CLI arguments. It binds Hermit's learner
 to the runtime's `learner` settings. A check without probing validates configuration but makes no video or model
 calls. A full probe runs the actual acting pipeline and evaluator and therefore needs the runtime resources.
+Set `slurm.max_hours: 24` in runtime settings for this cluster. The wrapper reports that external allocation
+limit alongside the four-epoch stopping condition; it does not invent a cumulative training-time or dollar cap.
 
 ## Generate and evaluate the baseline
 
@@ -86,7 +90,7 @@ python examples/video_transition/utils/submit.py \
   --mode baseline --gres gpu:h100:1 --account YOUR_ACCOUNT
 ```
 
-Submission freezes Python source, the task file, and runtime settings into a new run directory, and updates the
+Submission freezes the Hermit framework, task Python source, adapter, tasks, rubrics, and runtime settings into a new run directory, and updates the
 local `baseline_root`. Keys are loaded from the private file in the job, rather than embedded in its script.
 Each case saves an MP4, latent tensor, original task, actual prompt-switch positions, timing, and model provenance.
 Source revision recording works even if Git is absent from the CUDA job image.
@@ -124,13 +128,53 @@ Once generation, timing, and judgments have been inspected, submit the two-train
 ```bash
 python examples/video_transition/utils/submit.py \
   --runtime examples/video_transition/runtime.local.json \
-  --mode evolve --gres gpu:h100:1 --account YOUR_ACCOUNT --time 02:00:00
+  --mode evolve --gres gpu:h100:1 --account YOUR_ACCOUNT --time 24:00:00
 ```
+
+Both GEPA configs request **four epochs**. The pilot has eight training steps (two tasks, one per step); the full
+config has sixteen steps (eight tasks, two per step). Training ends after all four epochs. The former 40,000-token
+and two-hour pilot caps have been removed; these configs have no cumulative money, token, or training-time cap.
+Each Slurm allocation is at most 24 hours. The per-call timeout still detects a stuck Evolver call.
 
 The job trains and evaluates root and final adapters. The evolving file is explicitly declared in the template
 and GEPA config; the pipeline loads it for every candidate. `gepa/run.yaml` uses the full 8/2/2 source-stream
 split and explicit test tasks for seeds 0, 1, and 2, and should follow a successful pilot with an explicit resource
 budget. Its `eval.repeats` stays at one: repeating a deterministic cached task would not create independent seeds.
+
+## Resume across Slurm allocations
+
+Evolve submissions default to `24:00:00` and reject requests above the cluster's 24-hour limit. The batch script
+requests `--requeue` and a `USR1` warning two minutes before the time limit. Its warning handler calls
+`scontrol requeue` on the same job. Slurm terminates that allocation's processes and schedules another allocation
+with the same experiment directory. A user cancellation does not trigger this handler. Ordinary execution errors
+stop the job for inspection rather than creating an endless retry loop. Use `--no-auto-resume` to disable the
+time-limit handler for a new experiment.
+
+Recovery uses several completion boundaries:
+
+- **Training:** Hermit restores the last committed step's adapter, GEPA candidate pool, progress, and spending.
+  Every step has a checkpoint tag. An unfinished step is replayed; its saved reflection response is reused, so a
+  completed proposal call is not purchased again. Reflections from different steps have separate cache scopes.
+- **Videos:** the task, generator identity, and video/latent checksums must match before reuse. Encoding and
+  manifest publication are atomic. Interrupted or invalid artifacts are retained under `attempts/` and that video
+  is regenerated from its seed. Recovery is at the video boundary, not at an individual denoising chunk.
+- **Judgments:** completed metric decisions and valid saved API responses are reused using the protocol and frame
+  checksums. A missing or interrupted metric is completed without repeating valid decisions.
+- **Evaluation:** root and final are separate stages. A successful stage is skipped when a later stage is resumed.
+
+To resume after an execution error or a cancelled allocation, fix its cause and submit the **same run directory**:
+
+```bash
+python examples/video_transition/utils/submit.py \
+  --resume /absolute/path/to/evolve-run
+```
+
+This retains the frozen config and source, model bindings, data, adapter tree, caches, and job resources. It rejects
+changed frozen files and duplicate submission of an already pending or active job. It never sets
+`trainer.resume_mode=disable`. `progress.json` records the active stage and Slurm restart count;
+`submissions/` records manual submissions and `job-complete.json` appears only after all stages succeed.
+API spending after the last committed step can be absent from Hermit's restored budget; saved response usage
+remains available in the reflection and evaluation caches.
 
 The generator is a separate process for each uncached Hermit task. This pilot favors a simple verifiable boundary;
 a persistent generator service can reduce model reload overhead later. Vision-judge calls and GPU time are recorded
@@ -143,7 +187,9 @@ python -m pytest examples/video_transition/utils/tests
 ```
 
 Tests cover source-group split isolation, frame timing, strict evaluator output validation, information available
-to the controller, plan budgets, and cancellation of stale plans. Tests use fake clients and make no paid calls.
+to the controller, plan budgets, cancellation of stale plans, interrupted-file recovery, stage recovery, and the
+Slurm warning handler. Tests use fake clients and make no paid calls. The core Trainer tests also interrupt and
+resume four-epoch training, including a crash before the first checkpoint.
 
 ## References
 

@@ -23,7 +23,22 @@ def main():
     os.environ["VIDEO_TRANSITION_CONFIG"]=settings["_config_path"]
     learner={key:value for key,value in settings["learner"].items()
              if key in ("base_url","model","api_key_env","key_required","price","extra_body","timeout")}
-    command=[sys.executable,"-m","hermit.cli",*args.command,"llm="+json.dumps(learner)]
+    if args.command[0] == "check" and settings.get("slurm", {}).get("max_hours") is not None:
+        from hermit.config import Config
+        from hermit.settings_check import run_check
+        check = argparse.ArgumentParser()
+        check.add_argument("--config", type=Path, required=True)
+        check.add_argument("--no-probe", action="store_true")
+        check.add_argument("overrides", nargs="*")
+        options = check.parse_args(args.command[1:])
+        config = Config.load(options.config, [*options.overrides, "llm=" + json.dumps(learner)])
+        raise SystemExit(0 if run_check(config, probe=not options.no_probe,
+                                      allocation_hours=float(settings["slurm"]["max_hours"])) else 1)
+    if args.command[0] == "train":
+        command=[sys.executable,"-u",str(Path(__file__).with_name("resume_training.py")),
+                 *args.command[1:],"llm="+json.dumps(learner)]
+    else:
+        command=[sys.executable,"-m","hermit.cli",*args.command,"llm="+json.dumps(learner)]
     raise SystemExit(subprocess.run(command).returncode)
 
 

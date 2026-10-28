@@ -9,6 +9,7 @@ import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[3]))
 from examples.video_transition.utils.evaluate_video import evaluate
 from examples.video_transition.utils.remote import load_settings
+from hermit.io import atomic_json
 
 
 def main():
@@ -36,7 +37,7 @@ def main():
         summary['metrics']={name:sum(row['metrics'][name] for row in results if name in row['metrics']) /
                             sum(name in row['metrics'] for row in results) for name in sorted(names)}
         summary['score']=sum(summary['metrics'].values())/len(summary['metrics'])
-    (run/'evaluation-summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2)+'\n')
+    atomic_json(run/'evaluation-summary.json',summary)
     print(json.dumps({key:value for key,value in summary.items() if key!='cases'},indent=2))
     if errors: raise SystemExit(1)
 

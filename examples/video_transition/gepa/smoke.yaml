@@ -46,10 +46,10 @@ sandbox:
 trainer:
   run_name: video-transition-pilot
   output_dir: ../../../.demo/video-transition/hermit-runs
-  epochs: 1
-  budget:
-    tokens: 40000
-    hours: 2
+  epochs: 4
+  resume_mode: auto
+  save_freq: {steps: 1, epochs: 1}
+  budget: {usd: null, tokens: null, hours: null}
   call_timeout_min: 45
 eval:
   repeats: 1

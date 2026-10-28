@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 import shutil
 import tempfile
@@ -22,7 +23,7 @@ DISCLAIMER = ("check looks only at the basic items above. Passing it does not gu
               "problems or that the run will succeed.")
 
 
-def run_check(config: Config, *, probe: bool = True, log=print) -> bool:
+def run_check(config: Config, *, probe: bool = True, log=print, allocation_hours: float | None = None) -> bool:
     d = config.data
     ok = True
 
@@ -121,8 +122,14 @@ def run_check(config: Config, *, probe: bool = True, log=print) -> bool:
            f"network={d['sandbox']['network']}, env={d['sandbox']['env']}")
     # Budgets.
     b = d["trainer"]["budget"]
-    report("budgets", [] if any(b.get(k) for k in ("usd", "tokens", "hours")) else ["no hard budget is set"],
-           f"hard {b}, {d['trainer']['epochs']} epoch(s)")
+    external = allocation_hours is not None and math.isfinite(allocation_hours) and allocation_hours > 0
+    budget_problems = [] if any(b.get(k) for k in ("usd", "tokens", "hours")) or external else ["no hard budget is set"]
+    if allocation_hours is not None and not external:
+        budget_problems.append("external allocation_hours must be finite and positive")
+    note = f"hard {b}, {d['trainer']['epochs']} epoch(s)"
+    if external:
+        note += f", external allocation limit {allocation_hours:g} h (no cumulative limit implied)"
+    report("budgets", budget_problems, note)
     # Probe: one training task through the agent and the judge, without an adapter.
     if probe and data is not None and pipeline is not None and data.splits["train"]:
         task = data.tasks[data.splits["train"][0]]

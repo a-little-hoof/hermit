@@ -11,6 +11,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from examples.video_transition.utils.remote import image_part, load_settings, model_client, parse_json_reply
+from hermit.io import atomic_json
 
 
 def validate_plan(reply: dict, budget: int, max_steps: int = 4) -> list[dict]:
@@ -88,7 +89,7 @@ def main():
     settings = load_settings(args.config)
     request = json.loads(args.request.read_text())
     result = plan(request, args.skill.read_text(), settings)
-    args.response.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
+    atomic_json(args.response, result)
 
 
 if __name__ == "__main__":

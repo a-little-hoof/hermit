@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from hermit.task import RunOutput
 from examples.video_transition.utils.protocol import validate_task
 from examples.video_transition.utils.remote import load_settings
+from examples.video_transition.utils.artifacts import completed_case
 
 
 def run(task: dict, adapter: Path | None, *, params: dict, base: Path) -> RunOutput:
@@ -37,7 +38,7 @@ def run(task: dict, adapter: Path | None, *, params: dict, base: Path) -> RunOut
                 "controller_sampling": settings.get("controller_sampling"),
                 "budget_chunks": settings.get("budget_chunks", 4),
                 "code_sha256": hashlib.sha256(b"".join(Path(__file__).with_name(name).read_bytes() for name in
-                    ("pipeline.py", "protocol.py", "controller.py", "remote.py", "streaming.py", "longlive_worker.py"))).hexdigest()}
+                    ("pipeline.py", "protocol.py", "controller.py", "remote.py", "streaming.py", "longlive_worker.py", "artifacts.py"))).hexdigest()}
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:20]
     root = Path(settings["run_root"]) / f"{mode}-{task['id']}-{digest}"
     manifest_path = root / task["id"] / "manifest.json"
@@ -48,7 +49,7 @@ def run(task: dict, adapter: Path | None, *, params: dict, base: Path) -> RunOut
             if saved.get("task") == task and saved.get("status") == "complete":
                 manifest_path = baseline
     started = time.perf_counter()
-    cached = manifest_path.exists()
+    cached = completed_case(manifest_path.parent, task, mode)
     if not cached:
         if not os.environ.get("SLURM_JOB_ID") and not settings.get("allow_local_gpu", False):
             raise RuntimeError("Uncached video generation needs a Slurm GPU allocation; run the Hermit driver inside it")
@@ -59,7 +60,7 @@ def run(task: dict, adapter: Path | None, *, params: dict, base: Path) -> RunOut
         command = [generator["python"], "-u", str(Path(__file__).with_name("longlive_worker.py")),
                    "--tasks", str(task_file), "--source", generator["source"], "--models", generator["models"],
                    "--base-checkpoint", generator["base_checkpoint"], "--lora-checkpoint", generator["lora_checkpoint"],
-                   "--output-dir", str(root), "--mode", mode]
+                   "--output-dir", str(root), "--mode", mode, "--resume"]
         if mode == "controller":
             # Freeze this candidate while the separate CUDA process reads it.
             frozen = root / "SKILL.md"

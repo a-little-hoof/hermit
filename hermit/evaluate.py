@@ -8,6 +8,7 @@ import time
 
 from hermit.adapter.manifest import MANIFEST
 from hermit.config import Config
+from hermit.io import atomic_json
 from hermit.isolate import agent_pipeline
 from hermit.task import TaskData, load_callable
 from hermit.trainer.budget import Budget
@@ -70,7 +71,7 @@ def evaluate(config: Config, adapter: str, *, log=print) -> dict:
                "solved_once": sum(1 for v in per_task.values() if any(s >= 1.0 for s in v)) / len(tests),
                "cost_usd": spent["usd"]["rollout"] if not spent["unknown_cost_calls"] else None,
                "unknown_cost_tasks": spent["unknown_cost_calls"], "errors": errors, "wall_s": round(time.time() - t0, 1)}
-    (out / "summary.json").write_text(json.dumps(summary, indent=1))
+    atomic_json(out / "summary.json", summary)
     if adapter == "final":
         _update_card(Tree(tree_dir), run_name, run_dir, summary)
     return summary

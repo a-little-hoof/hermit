@@ -152,6 +152,10 @@ With `trainer.resume_mode: auto`, an unfinished run resumes from its last comple
 adapter commit and learner-state snapshot, drops later incomplete material, and recomputes the next batch from the
 seed and progress.
 
+Step journals and the final summary are published with atomic renames. Recovery also handles a crash before the
+first completed step: it resets the adapter to the starting commit and clears uncommitted learner state. A trailing
+partial journal line from an older run is retained separately and discarded from the committed step list.
+
 Budget accounting also resumes from that step's saved record. Work done after it and before the crash may therefore
 be absent from restored spending. Resuming a learner's external host session additionally depends on that host and
 Evolver.
@@ -172,6 +176,10 @@ only after the host session ends.
 
 Recorded dollar cost depends on known usage and applicable prices. Separate `check` probes and `eval` commands are
 outside the training budget. See [Configuration](configuration.md#budgets-and-checkpoint-frequency).
+
+A scheduler integration can pass `allocation_hours` to Python's `run_check` to declare an externally enforced
+limit for each allocation. The check reports it separately from cumulative training budgets; the scheduler
+integration remains responsible for enforcing that limit and resuming interrupted work.
 
 ## Minimal example
 

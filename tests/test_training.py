@@ -158,6 +158,82 @@ def test_resume_after_crash(tmp_path):
     assert summary["steps"] == 4
 
 
+def test_resume_completes_four_epochs_without_repeating_committed_steps(tmp_path):
+    from examples.video_transition.utils.resume_training import VideoTrainer
+    path = make_task(tmp_path)
+    trainer = VideoTrainer(load(path, "trainer.epochs=4"), log=lambda *_: None)
+    original = trainer._checkpoint
+
+    def interrupt(record):
+        original(record)
+        if record["step"] == 3:
+            raise KeyboardInterrupt("allocation ended")
+    trainer._checkpoint = interrupt
+    with pytest.raises(KeyboardInterrupt):
+        trainer.train()
+    (trainer.ws.state / "uncommitted.txt").write_text("discard on resume")
+    resumed = VideoTrainer(load(path, "trainer.epochs=4"), log=lambda *_: None)
+    next_step = resumed._step
+    visited = []
+
+    def track(progress, *args):
+        visited.append(progress.step)
+        assert not (resumed.ws.state / "uncommitted.txt").exists()
+        return next_step(progress, *args)
+    resumed._step = track
+    summary = resumed.train()
+    assert visited == [4, 5, 6, 7, 8]
+    assert summary["steps"] == 8 and summary["stop_reason"] == "completed all epochs"
+    records = [json.loads(line) for line in (resumed.run_dir / "steps.jsonl").read_text().splitlines()]
+    assert [record["epoch"] for record in records] == [1, 1, 2, 2, 3, 3, 4, 4]
+
+
+def test_crash_before_first_journal_record_discards_candidate_and_state(tmp_path, monkeypatch):
+    import hermit.io as io
+    path = make_task(tmp_path)
+    trainer = Trainer(load(path, "trainer.epochs=1"), log=lambda *_: None)
+    replace = io.os.replace
+
+    def lose_allocation(source, target):
+        if Path(target).name == "steps.jsonl":
+            raise KeyboardInterrupt("lost allocation before first checkpoint publication")
+        return replace(source, target)
+    with monkeypatch.context() as patch:
+        patch.setattr(io.os, "replace", lose_allocation)
+        with pytest.raises(KeyboardInterrupt):
+            trainer.train()
+    assert not (trainer.run_dir / "steps.jsonl").exists()
+    assert (trainer.ws.state / "seen.txt").exists()
+    resumed = Trainer(load(path, "trainer.epochs=1"), log=lambda *_: None)
+    original = resumed._step
+
+    def check_first(progress, *args):
+        if progress.step == 1:
+            assert not list(resumed.ws.state.iterdir())
+        return original(progress, *args)
+    resumed._step = check_first
+    resumed.train()
+    records = [json.loads(line) for line in (resumed.run_dir / "steps.jsonl").read_text().splitlines()]
+    assert records[0]["rollout"]["mean_score"] == 0.0
+
+
+def test_resume_recovers_a_legacy_torn_journal_tail(tmp_path):
+    path = make_task(tmp_path)
+    trainer = Trainer(load(path), log=lambda *_: None)
+
+    def interrupt(record):
+        raise KeyboardInterrupt("allocation ended")
+    trainer._checkpoint = interrupt
+    with pytest.raises(KeyboardInterrupt):
+        trainer.train()
+    journal = trainer.run_dir / "steps.jsonl"
+    with journal.open("a") as stream:
+        stream.write('{"step": 2, "epoch":')
+    resumed = Trainer(load(path), log=lambda *_: None)
+    assert resumed.train()["steps"] == 4
+    assert (trainer.run_dir / "steps.interrupted-tail.txt").read_text() == '{"step": 2, "epoch":'
+
+
 def test_budget_stops_the_run(tmp_path):
     cfg = load(make_task(tmp_path), "trainer.budget.usd=0.05")
     summary = Trainer(cfg, log=lambda *_: None).train()
@@ -212,6 +288,17 @@ def test_check_command(tmp_path, capsys):
     lines = []
     assert not run_check(load(tmp_path / "run.yaml"), log=lines.append)
     assert any("share" in l for l in lines)
+
+
+def test_check_accepts_declared_external_allocation_limit(tmp_path):
+    cfg = load(make_task(tmp_path), "trainer.budget.usd=null", "trainer.epochs=4")
+    lines = []
+    assert not run_check(cfg, probe=False, log=lines.append)
+    assert any("no hard budget" in line for line in lines)
+    lines.clear()
+    assert run_check(cfg, probe=False, log=lines.append, allocation_hours=24)
+    assert any("external allocation limit 24 h" in line for line in lines)
+    assert not run_check(cfg, probe=False, log=lambda *_: None, allocation_hours=float("inf"))
 
 
 def test_overrides_reject_unknown_keys(tmp_path):

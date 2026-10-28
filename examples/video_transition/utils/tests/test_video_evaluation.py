@@ -81,3 +81,25 @@ def test_interrupted_target_window_is_not_silently_scored_as_standard(video,tmp_
     with pytest.raises(ValueError,match='interruption protocol'):
         evaluate(task,video,settings(tmp_path),tmp_path/'scores',client=client)
     assert not client.calls
+
+
+def test_resume_reuses_paid_response_if_judgment_publish_was_interrupted(video, tmp_path, monkeypatch):
+    import examples.video_transition.utils.evaluate_video as module
+    task={'id':'fixture','events':[{'time_s':0,'prompt':'old'},{'time_s':10,'prompt':'new'}], 'duration_s':20}
+    config=settings(tmp_path)
+    client=Client()
+    original=module.atomic_json
+
+    def interrupt(path, value):
+        if path.name == 'switch-01-VBS.json':
+            raise OSError('allocation lost after receiving paid response')
+        return original(path,value)
+    with monkeypatch.context() as patch:
+        patch.setattr(module,'atomic_json',interrupt)
+        with pytest.raises(OSError):
+            evaluate(task,video,config,tmp_path/'scores',client=client)
+    paid_calls=len(client.calls)
+    assert 1 <= paid_calls <= 8
+    result=evaluate(task,video,config,tmp_path/'scores',client=client)
+    assert len(client.calls) == 8 and result['new_queries'] == 8 - paid_calls
+    assert result['score'] == 1

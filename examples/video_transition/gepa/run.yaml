@@ -46,10 +46,10 @@ sandbox:
 trainer:
   run_name: video-transition-longlive
   output_dir: ../../../.demo/video-transition/hermit-runs
-  epochs: 1
-  budget:
-    tokens: 160000
-    hours: 6
+  epochs: 4
+  resume_mode: auto
+  save_freq: {steps: 1, epochs: 1}
+  budget: {usd: null, tokens: null, hours: null}
   call_timeout_min: 90
 eval:
   repeats: 1  # Test rows explicitly name seeds 0, 1 and 2; repeated cached calls are not new samples.

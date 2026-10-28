@@ -4,6 +4,10 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from hermit.io import atomic_json
 
 
 def main():
@@ -31,7 +35,7 @@ def main():
         records.append({'id':identifier,'passed':close,'max_abs':(a-b).abs().max().item(),
                         'mean_abs':(a-b).abs().mean().item(),'atol':args.atol,'rtol':args.rtol})
     result={'status':'passed' if all(r['passed'] for r in records) else 'failed','comparisons':records}
-    (args.candidate/'parity.json').write_text(json.dumps(result,indent=2)+'\n')
+    atomic_json(args.candidate/'parity.json',result)
     print(json.dumps(result,indent=2))
     if result['status']!='passed': raise SystemExit(1)
 

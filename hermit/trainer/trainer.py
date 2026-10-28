@@ -36,6 +36,7 @@ from hermit.evolver.base import (Access, Context, Evolver, FinalResult, Progress
                                          Workspace)
 from hermit.evolver.loader import find, instantiate
 from hermit.llm import ChatClient
+from hermit.io import atomic_json, atomic_text
 from hermit.isolate import HOME_SECRETS, ToolRunner, agent_pipeline, profile
 from hermit.sandbox import AllowlistProxy, Sandbox, network_mode
 from hermit.spec import check_spec, repair
@@ -159,7 +160,7 @@ class Trainer:
             self.log(f"WARNING: {w}")
         self.tree = Tree.open_or_create(self.config.tree_dir(self.template["id"]), self.template_dir)
         mode = str(d["trainer"]["resume_mode"])
-        unfinished = (self.run_dir / "steps.jsonl").exists() and not (self.run_dir / "summary.json").exists()
+        unfinished = self.run_dir.exists() and not (self.run_dir / "summary.json").exists()
         if self.run_dir.exists() and mode == "disable":
             stamp = time.strftime("%Y%m%d-%H%M%S")
             self.run_dir.rename(self.run_dir.with_name(f"{self.run_name}.replaced-{stamp}"))
@@ -229,8 +230,8 @@ class Trainer:
                                                 "class": self.spec.class_path, "needs": self.spec.needs,
                                                 "params": self.params},
                     "warnings": self.warnings, "python": self.python}
-        if not self.resuming:
-            (self.run_dir / "config.yaml").write_text(yaml.safe_dump(resolved, sort_keys=False, allow_unicode=True))
+        if not self.resuming or not (self.run_dir / "config.yaml").exists():
+            atomic_text(self.run_dir / "config.yaml", yaml.safe_dump(resolved, sort_keys=False, allow_unicode=True))
 
     def _start_ref(self) -> str:
         value = self.config.data.get("start_from")
@@ -265,7 +266,14 @@ class Trainer:
         if done:
             self._restore(done[-1])
         else:
-            self.material.truncate(0)     # leftovers of a step that never completed
+            # A crash can precede the first recorded step, including after a git commit.
+            # Neither the partial candidate nor its mutable Evolver state is a checkpoint.
+            Tree.reset(self.checkout, self.start_commit)
+            _fresh(self.ws.state)
+            self.material.truncate(0)
+            for partial in self.run_dir.glob("step_*"):
+                if partial.is_dir() and partial.name[5:].isdigit():
+                    shutil.rmtree(partial)
         last_feedback = done[-1].get("check_feedback_next") if done else None
         self._last_rollout_commit = done[-1]["parent"] if done and not done[-1].get("bootstrap") else None
         ctx = self._context()
@@ -311,7 +319,14 @@ class Trainer:
         path = self.run_dir / "steps.jsonl"
         if not self.resuming or not path.exists():
             return []
-        steps = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+        text = path.read_text()
+        lines = text.splitlines(keepends=True)
+        # Older versions appended records. A killed append can leave an uncommitted tail.
+        # Refuse corruption in the middle; only a final line without its newline is recoverable.
+        if lines and not lines[-1].endswith("\n"):
+            atomic_text(path.with_name("steps.interrupted-tail.txt"), lines.pop())
+            atomic_text(path, "".join(lines))
+        steps = [json.loads(l) for l in lines if l.strip()]
         if steps:
             self.log(f"resuming {self.run_name} after step {steps[-1]['step']}")
         return steps
@@ -518,7 +533,7 @@ class Trainer:
         step_dir = self.run_dir / f"step_{n:04d}"
         _copy_dir(self.ws.output, step_dir / "output")
         _copy_dir(self.ws.state, step_dir / "state")
-        (step_dir / "step_result.json").write_text(json.dumps(asdict(result), indent=1, default=str))
+        atomic_json(step_dir / "step_result.json", asdict(result))
         record = {"step": n, "epoch": progress.epoch, "tasks": chunk, **({"bootstrap": True} if what == "bootstrap" else {}),
                   "rollout": {"mean_score": _mean([r["judge"]["score"] for r in results]),
                               "scores": {r["id"]: r["judge"]["score"] for r in results},
@@ -533,8 +548,9 @@ class Trainer:
                   "commit": Tree.head(self.checkout), "changed": Tree.head(self.checkout) != parent,
                   "check": check, "repaired": repaired, "check_feedback_next": repaired or None,
                   "budget_after": self.budget.snapshot(), "time": time.strftime("%Y-%m-%dT%H:%M:%S")}
-        with open(self.run_dir / "steps.jsonl", "a") as f:
-            f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+        journal = self.run_dir / "steps.jsonl"
+        previous = journal.read_text() if journal.exists() else ""
+        atomic_text(journal, previous + json.dumps(record, ensure_ascii=False, default=str) + "\n")
         self.log(f"step {n}: mean score {record['rollout']['mean_score']}, evolver {result.status}: {result.summary}"
                  f"; adapter {'changed' if record['changed'] else 'unchanged'}"
                  + (f"; repaired {len(repaired)} file(s)" if repaired else ""))
@@ -634,7 +650,7 @@ class Trainer:
                    "bootstrap": any(s.get("bootstrap") for s in steps), "spending": self.budget.snapshot(),
                    "checkpoints": self._tags(prefix=f"{self.run_name}/ckpt-"), "finalize": note,
                    "warnings": self.warnings}
-        (self.run_dir / "summary.json").write_text(json.dumps(summary, indent=1))
+        atomic_json(self.run_dir / "summary.json", summary)
         self._close_sandboxes()
         return summary
 

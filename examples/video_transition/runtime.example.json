@@ -32,6 +32,7 @@
   "orchestrator_python": "<hermit-python-3.11-or-newer>",
   "run_root": "<absolute-path-for-generated-runs>",
   "evaluator_protocol": "segue-table12-glm5p3-flash-low-json-pilot-v1",
+  "slurm": {"max_hours": 24},
   "generator": {
     "python": "<longlive-cuda-environment-python>",
     "source": "<official-longlive-1.0-source-directory>",

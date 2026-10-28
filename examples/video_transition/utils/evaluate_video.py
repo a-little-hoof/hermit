@@ -12,6 +12,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from examples.video_transition.utils.protocol import METRICS, metric_times, validate_task
 from examples.video_transition.utils.remote import image_part, load_settings, model_client, parse_json_reply
+from hermit.io import atomic_json
 
 
 def extract_frames(video: Path, times: list[float], destination: Path) -> dict[float, dict]:
@@ -67,7 +68,8 @@ def validate_judgments(reply: dict) -> list[int]:
 
 
 def evaluate_metric(metric: str, frames: list[dict], previous: str, latest: str,
-                    criteria: list[str], client, sampling: dict, response_path: Path | None = None) -> dict:
+                    criteria: list[str], client, sampling: dict, response_path: Path | None = None,
+                    response_identity: dict | None = None) -> dict:
     if len(criteria) != 10:
         raise ValueError("each metric requires exactly ten fixed criteria")
     text = {"metric": metric, "criteria": [{"number": i + 1, "criterion": rule} for i, rule in enumerate(criteria)]}
@@ -88,15 +90,29 @@ def evaluate_metric(metric: str, frames: list[dict], previous: str, latest: str,
         )},
         {"role": "user", "content": content},
     ]
-    message, usage = client.chat(messages, **sampling)
-    if response_path:
-        response_path.write_text(json.dumps({"content": message.get("content"), "finish_reason": message.get("finish_reason"),
-            "reasoning_characters": len(message.get("reasoning_content") or ""), "usage": asdict(usage)}, indent=2) + "\n")
+    message, usage_data = None, None
+    reused = False
+    if response_path and response_identity and response_path.exists():
+        try:
+            saved = json.loads(response_path.read_text())
+            if saved.get("identity") == response_identity:
+                validate_judgments(parse_json_reply(saved.get("content")))
+                message, usage_data = saved, saved["usage"]
+                reused = True
+        except (ValueError, KeyError):
+            pass
+    if message is None:
+        message, usage = client.chat(messages, **sampling)
+        usage_data = asdict(usage)
+        if response_path:
+            atomic_json(response_path, {"content": message.get("content"), "finish_reason": message.get("finish_reason"),
+                "reasoning_characters": len(message.get("reasoning_content") or ""), "usage": usage_data,
+                "identity": response_identity})
     if not message.get("content"):
-        raise RuntimeError(f"{metric}: no final JSON; finish_reason={message.get('finish_reason')}, output_tokens={usage.output_tokens}")
+        raise RuntimeError(f"{metric}: no final JSON; finish_reason={message.get('finish_reason')}, output_tokens={usage_data.get('output_tokens')}")
     values = validate_judgments(parse_json_reply(message.get("content")))
     return {"metric": metric, "judgments": values, "sum": sum(values), "score": sum(values)/10,
-            "frames": frames, "usage": asdict(usage),
+            "frames": frames, "usage": usage_data, "response_cache_hit": reused,
             "failed_criteria": [{"number": i+1, "criterion": criteria[i]} for i,value in enumerate(values) if not value]}
 
 
@@ -133,7 +149,7 @@ def evaluate(task: dict, video: Path, settings: dict, destination: Path, client=
               "sampling": sampling, "image_preprocessing": "native-resolution JPEG quality 95, nearest decoded PTS",
               "task": task}
     fingerprint = hashlib.sha256(json.dumps(config, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-    (destination / "protocol.json").write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
+    atomic_json(destination / "protocol.json", config)
 
     def run(job):
         index, metric, times = job
@@ -141,16 +157,21 @@ def evaluate(task: dict, video: Path, settings: dict, destination: Path, client=
         frames = [extracted[t] for t in times]
         evidence = hashlib.sha256(b"".join(Path(frame["path"]).read_bytes() for frame in frames)).hexdigest()
         if path.exists():
-            cached = json.loads(path.read_text())
+            try:
+                cached = json.loads(path.read_text())
+            except json.JSONDecodeError:
+                cached = {}
             if cached.get("protocol_sha256") == fingerprint and cached.get("evidence_sha256") == evidence:
                 validate_judgments(cached)
                 return {**cached, "cache_hit": True}
         result = evaluate_metric(metric, frames, task["events"][index-1]["prompt"],
                                  task["events"][index]["prompt"], rubrics["metrics"][metric], client, sampling,
-                                 response_path=path.with_suffix(".response.json"))
+                                 response_path=path.with_suffix(".response.json"),
+                                 response_identity={"protocol_sha256": fingerprint, "evidence_sha256": evidence})
         result.update(switch_index=index, requested_switch_s=task["events"][index]["time_s"],
-                      protocol_sha256=fingerprint, evidence_sha256=evidence, cache_hit=False)
-        path.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
+                      protocol_sha256=fingerprint, evidence_sha256=evidence,
+                      cache_hit=result.pop("response_cache_hit", False))
+        atomic_json(path, result)
         print(f"EVALUATED {task['id']} switch={index} {metric}={result['score']:.1f}", flush=True)
         return result
 
@@ -173,7 +194,7 @@ def evaluate(task: dict, video: Path, settings: dict, destination: Path, client=
         "new_input_tokens": sum(r["usage"].get("input_tokens", 0) for r in results if not r.get("cache_hit", False)),
         "new_output_tokens": sum(r["usage"].get("output_tokens", 0) for r in results if not r.get("cache_hit", False)),
     }
-    (destination / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
+    atomic_json(destination / "summary.json", summary)
     return summary
 
 

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -11,6 +13,8 @@ import types
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from examples.video_transition.utils.protocol import FPS, latent_boundary, pixel_time, validate_task
+from examples.video_transition.utils.artifacts import file_sha256, prepare_case
+from hermit.io import atomic_json
 
 
 def source_revision(source: Path) -> str:
@@ -69,6 +73,7 @@ def main():
     parser.add_argument("--runtime-config", type=Path)
     parser.add_argument("--skill", type=Path)
     parser.add_argument("--save-latents", action="store_true")
+    parser.add_argument("--resume", action="store_true", help="reuse verified complete cases and retry interrupted cases")
     args = parser.parse_args()
     source = args.source.resolve()
     if args.runtime_config:
@@ -92,6 +97,23 @@ def main():
         raise ValueError("no tasks selected")
     for task in tasks:
         validate_task(task)
+    identity = {"mode": args.mode, "source_revision": source_revision(source),
+                "assets": [{"path": str(path.resolve()), "bytes": path.stat().st_size,
+                            "mtime_ns": path.stat().st_mtime_ns}
+                           for path in (args.base_checkpoint, args.lora_checkpoint, *args.models.glob("*.pth"),
+                                        args.models / "diffusion_pytorch_model.safetensors")],
+                "code": {name: file_sha256(Path(__file__).with_name(name)) for name in
+                         ("longlive_worker.py", "streaming.py", "controller.py", "remote.py", "protocol.py", "artifacts.py")}}
+    if args.mode == "controller":
+        identity.update(skill=args.skill.read_text(), controller=settings["controller"],
+                        sampling=settings.get("controller_sampling"), budget_chunks=settings.get("budget_chunks", 4))
+    generation_id = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+    pending = [task for task in tasks if not prepare_case(destination / task["id"], task, args.mode,
+                                                          generation_id, args.save_latents, args.resume)]
+    if not pending:
+        atomic_json(destination / "complete.json", {"tasks": [task["id"] for task in tasks], "status": "complete"})
+        print("All requested videos are verified cache hits.", flush=True)
+        return
     model_link = destination / "runtime/wan_models/Wan2.1-T2V-1.3B"
     model_link.parent.mkdir(parents=True, exist_ok=True)
     if model_link.is_symlink():
@@ -159,13 +181,14 @@ def main():
         "lora_tensor_count": lora_count, "config": OmegaConf.to_container(config),
         "startup_s": time.perf_counter() - started,
     }
-    (destination / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    provenance_path = destination / "provenance" / f"{stamp}.json"
+    atomic_json(provenance_path, provenance)
+    atomic_json(destination / "provenance.json", provenance)
     original_recache = pipeline._recache_after_switch
-    for task in tasks:
+    for task in pending:
         case = destination / task["id"]
         case.mkdir(exist_ok=True)
-        if (case / "manifest.json").exists():
-            raise FileExistsError(f"refusing to overwrite a completed case: {case}")
         task_start = time.perf_counter()
         set_seed(int(task["seed"]))
         torch.cuda.reset_peak_memory_stats()
@@ -198,7 +221,9 @@ def main():
         torch.cuda.synchronize()
         generation_s = time.perf_counter() - task_start
         video_path = case / "video.mp4"
-        shape = encode_video(video_path, video)
+        temporary_video = case / ".video.partial.mp4"
+        shape = encode_video(temporary_video, video)
+        temporary_video.replace(video_path)
         manifest = {
             "status": "error" if control_errors else "complete", "mode": args.mode, "task": task,
             "video_path": str(video_path), "frames_shape": shape, "fps": FPS,
@@ -206,17 +231,21 @@ def main():
             "generation_and_decode_s": generation_s, "total_s": time.perf_counter() - task_start,
             "peak_allocated_gib": torch.cuda.max_memory_allocated() / 2**30,
             "peak_reserved_gib": torch.cuda.max_memory_reserved() / 2**30,
-            "provenance_path": str(destination / "provenance.json"),
+            "provenance_path": str(provenance_path), "generation_id": generation_id,
+            "video_sha256": file_sha256(video_path),
             "controller_trace": controller_trace, "control_errors": control_errors,
         }
         if args.save_latents:
-            torch.save(latents.detach().cpu(), case / "latents.pt")
-        (case / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+            temporary_latents = case / ".latents.partial.pt"
+            torch.save(latents.detach().cpu(), temporary_latents)
+            temporary_latents.replace(case / "latents.pt")
+            manifest["latents_sha256"] = file_sha256(case / "latents.pt")
+        atomic_json(case / "manifest.json", manifest)
         print("CASE_COMPLETE", json.dumps({"id": task["id"], "generation_s": generation_s, "shape": shape}), flush=True)
         if control_errors:
             raise RuntimeError(f"controller failed; inspect {case / 'manifest.json'}")
         del noise, video, latents
-    (destination / "complete.json").write_text(json.dumps({"tasks": [task["id"] for task in tasks], "status": "complete"}, indent=2) + "\n")
+    atomic_json(destination / "complete.json", {"tasks": [task["id"] for task in tasks], "status": "complete"})
 
 
 if __name__ == "__main__":
