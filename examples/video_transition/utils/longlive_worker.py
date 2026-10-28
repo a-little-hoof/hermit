@@ -100,7 +100,7 @@ def main():
     identity = {"mode": args.mode, "source_revision": source_revision(source),
                 "assets": [{"path": str(path.resolve()), "bytes": path.stat().st_size,
                             "mtime_ns": path.stat().st_mtime_ns}
-                           for path in (args.base_checkpoint, args.lora_checkpoint, *args.models.glob("*.pth"),
+                           for path in (args.base_checkpoint, args.lora_checkpoint, *sorted(args.models.glob("*.pth")),
                                         args.models / "diffusion_pytorch_model.safetensors")],
                 "code": {name: file_sha256(Path(__file__).with_name(name)) for name in
                          ("longlive_worker.py", "streaming.py", "controller.py", "remote.py", "protocol.py", "artifacts.py")}}
