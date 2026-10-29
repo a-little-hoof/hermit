@@ -9,6 +9,7 @@ from examples.video_transition.utils.prepare import prepare
 from examples.video_transition.utils.protocol import latent_boundary, metric_times, pixel_time, validate_task
 from examples.video_transition.utils.longlive_worker import source_revision
 from examples.video_transition.utils.prepare_two_prompt import prepare_pair
+from examples.video_transition.utils.prepare_ten_prompt import prepare_transitions
 
 
 def test_causal_decode_timing_and_chunk_quantization():
@@ -79,3 +80,32 @@ def test_two_prompt_debugging_split_preserves_pair_and_separates_seeds(tmp_path)
     assert all(row['events']==task['events'] for row in rows)
     assert len(set(result['splits'].values()))==3
     assert task['seed']==0 and task['id']=='example-pair'
+
+
+def test_ten_training_and_four_validation_transitions_have_disjoint_source_scenes(tmp_path):
+    original=[{'prompts':[f'scene {i} event {j}' for j in range(6)]} for i in range(12)]
+    raw='\n'.join(json.dumps(row) for row in original).encode()
+    result=prepare_transitions(tmp_path,raw,'test-revision')
+    rows=[json.loads(line) for line in (tmp_path/'tasks.jsonl').read_text().splitlines()]
+    by_id={row['id']:row for row in rows}
+    assert len(by_id)==28
+    assert [result['counts'][name]['prompt_pairs'] for name in ('train','val','test')]==[10,4,2]
+    assert [len(result['splits'][name]) for name in ('train','val','test')]==[10,12,6]
+    groups={name:{by_id[i]['source_group'] for i in result['splits'][name]} for name in result['splits']}
+    assert not (groups['train'] & groups['val'] or groups['train'] & groups['test'] or groups['val'] & groups['test'])
+    for name in ('val','test'):
+        for scene in groups[name]:
+            assert {by_id[i]['seed'] for i in result['splits'][name] if by_id[i]['source_group']==scene}=={0,1,2}
+    for row in rows:
+        source=row['source']
+        assert [e['prompt'] for e in row['events']]==[original[source['row']]['prompts'][j] for j in source['prompt_indices']]
+        assert [e['time_s'] for e in row['events']]==[0,10] and row['duration_s']==20
+    assert result==prepare_transitions(tmp_path,raw,'test-revision')
+    changed=json.loads(json.dumps(original));changed[2]['prompts'][0]='changed training prompt'
+    with pytest.raises(ValueError,match='refusing to replace'):
+        prepare_transitions(tmp_path,'\n'.join(json.dumps(row) for row in changed).encode(),'test-revision')
+
+
+def test_ten_prompt_preparation_refuses_unpinned_official_bytes(tmp_path):
+    with pytest.raises(ValueError,match='pinned source checksum'):
+        prepare_transitions(tmp_path,b'{}')

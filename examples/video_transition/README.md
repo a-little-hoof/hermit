@@ -66,6 +66,32 @@ so every remaining step attempts a proposal; acceptance and validation selection
 For this one-training-task config, 40 steps correspond to 40 epochs. The allocation limit and saved
 `--time-min` backfill policy continue to apply.
 
+## Ten training transitions and four validation transitions
+
+The pinned official interactive example contains twelve source scenes. This experiment selects ten distinct
+adjacent prompt pairs from six scenes for training, four pairs from four other scenes for validation, and two
+pairs from the remaining two scenes for testing. The four validation scenes are the boy on the lawn, the Rio
+street celebration, the couple picking a flower, and the model in pink smoke. Every validation and test pair
+uses seeds 0, 1, and 2, producing twelve validation tasks and six test tasks. No source scene crosses splits.
+
+Each video still has two unchanged official prompts, a switch at ten seconds, and twenty seconds of video.
+All candidates share one evolving skill. Four epochs over ten training tasks give forty steps, with a
+reproducible shuffled order and proposals attempted even when a training parent scores perfectly.
+
+```bash
+python examples/video_transition/utils/prepare_ten_prompt.py
+python examples/video_transition/utils/submit.py \
+  --mode evolve --runtime examples/video_transition/runtime.ten_prompt.local.json \
+  --gepa-config examples/video_transition/gepa/ten_prompt.yaml \
+  --steps 40 --always-propose --time 24:00:00 --time-min 00:30:00
+```
+
+Preparation reuses the configured offline two-prompt runtime and pins the original prompt file checksum.
+It preserves the previous one-pair experiment. Validation selects the final skill; the separate test scenes
+are evaluated for the initial and selected final skills after training. Cached videos and API responses,
+per-step checkpoints, and the 24-hour allocation resume mechanism apply to this run as well. The per-step
+timeout is ninety minutes to accommodate twelve validation videos when a new candidate is accepted.
+
 ## Model services and environments
 
 Use Hermit's Python 3.11+ environment for preparation, the controller API client, evaluation, and GEPA.
