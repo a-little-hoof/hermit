@@ -7,5 +7,5 @@ transition. Video generation then continues. API latency does not consume video 
 
 Training, validation, and test use the same prompt pair with seeds 0, 1, and 2 respectively. This tests adaptation
 within one pair and variation in generated states. It does not measure generalization to unseen user prompts.
-Four epochs mean four training steps. Only the shared skills/transition/SKILL.md is learnable; model weights,
+One epoch is one training step; the run config sets the total step target. Only the shared skills/transition/SKILL.md is learnable; model weights,
 controller code, scheduler, and evaluator are fixed. Judge feedback always refers to the original user targets.

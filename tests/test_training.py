@@ -188,6 +188,67 @@ def test_resume_completes_four_epochs_without_repeating_committed_steps(tmp_path
     assert [record["epoch"] for record in records] == [1, 1, 2, 2, 3, 3, 4, 4]
 
 
+def test_extend_finished_run_restores_training_state_and_archives_final_selection(tmp_path):
+    from examples.video_transition.utils.artifacts import file_sha256
+    from examples.video_transition.utils.extend_run import extend_run
+    from hermit.io import atomic_json
+
+    path = make_task(tmp_path)
+    # Final selection deliberately differs from the last training checkpoint.
+    with (tmp_path / "toy/evolver.py").open("a") as stream:
+        stream.write('''
+    def finalize(self, ctx):
+        from hermit.evolver.base import FinalResult
+        (ctx.workspace.adapter / "ADAPTER.md").write_text("Selected final policy.\\n")
+        (ctx.workspace.state / "seen.txt").write_text("finalized")
+        return FinalResult(ctx.workspace.adapter, "select a different policy")
+''')
+    summary = Trainer(load(path), log=lambda *_: None).train()
+    run = tmp_path / "runs/toy-run"
+    journal = (run / "steps.jsonl").read_bytes()
+    atomic_json(tmp_path / "plan.json", {
+        "mode": "evolve", "sha256": {"run.yaml": file_sha256(path)},
+        "stages": [{"kind": "train", "completion": str(run / "summary.json"), "expected_steps": 4}],
+    })
+    atomic_json(run / "eval/root/summary.json", {"score": 0})
+    atomic_json(run / "eval/final/summary.json", {"score": 1})
+    atomic_json(tmp_path / "job-complete.json", {"status": "complete"})
+    with pytest.raises(ValueError, match="multiple of 2"):
+        extend_run(tmp_path, 5)
+    assert (run / "summary.json").exists()
+    assert json.loads((tmp_path / "plan.json").read_text())["stages"][0]["expected_steps"] == 4
+
+    plan = extend_run(tmp_path, 6)
+    record = plan["extensions"][-1]
+    archive = Path(record["archive"])
+    assert load(path)["trainer"]["epochs"] == 3
+    assert plan["stages"][0]["expected_steps"] == 6
+    assert (archive / "selected-adapter/ADAPTER.md").read_text() == "Selected final policy.\n"
+    assert git(Path(summary["tree"]), "rev-parse", record["historical_final_ref"]) == summary["final_commit"]
+    assert json.loads((archive / "training-summary.json").read_text())["steps"] == 4
+    assert (archive / "final-evaluation/summary.json").exists()
+    assert (archive / "job-complete.json").exists()
+    assert not (run / "summary.json").exists() and not (run / "eval/final").exists()
+    assert (run / "eval/root/summary.json").exists()
+    assert not (run / "config.yaml").exists()
+    assert (run / "steps.jsonl").read_bytes() == journal
+
+    resumed = Trainer(load(path), log=lambda *_: None)
+    original = resumed._step
+    visited = []
+
+    def check_resume(progress, *args):
+        visited.append(progress.step)
+        if progress.step == 5:
+            assert (resumed.ws.state / "seen.txt").read_text() == "4"
+            assert "Always add the numbers" in (resumed.checkout / "ADAPTER.md").read_text()
+        return original(progress, *args)
+    resumed._step = check_resume
+    assert resumed.train()["steps"] == 6
+    assert visited == [5, 6]
+    assert (run / "steps.jsonl").read_bytes().startswith(journal)
+
+
 def test_crash_before_first_journal_record_discards_candidate_and_state(tmp_path, monkeypatch):
     import hermit.io as io
     path = make_task(tmp_path)

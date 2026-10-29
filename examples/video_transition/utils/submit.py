@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT))
 from hermit.io import atomic_json
 from examples.video_transition.utils.artifacts import file_sha256
 from examples.video_transition.utils.run_job import verify_snapshot
+from examples.video_transition.utils.extend_run import epochs_for_steps, extend_run
 
 
 def wall_seconds(value: str) -> int:
@@ -126,6 +127,12 @@ def freeze(args, runtime: Path, settings: dict) -> tuple[Path, dict]:
         config["agent"]["params"]["runtime_config"] = str(frozen_runtime)
         config["judge"]["path"] = str(utils / "judge.py")
         config["trainer"].update(output_dir=str(run / "hermit"), tree_dir=str(run / "hermit/trees"), resume_mode="auto")
+        if args.steps:
+            config["trainer"]["epochs"] = epochs_for_steps(config, run, args.steps)
+        if args.always_propose:
+            if config["evolver"]["name"] != "gepa":
+                raise ValueError("--always-propose applies to GEPA")
+            config["evolver"].setdefault("params", {})["skip_perfect_score"] = False
         frozen_config = run / "run.yaml"
         frozen_config.write_text(yaml.safe_dump(config, sort_keys=False))
         driver = [settings["orchestrator_python"], "-u", str(utils / "with_runtime.py"), "--runtime", str(frozen_runtime)]
@@ -255,6 +262,8 @@ def main(argv=None):
     parser.add_argument("--cpus", type=int)
     parser.add_argument("--time")
     parser.add_argument("--time-min", help="allow backfill to shorten an allocation to at least HH:MM:SS")
+    parser.add_argument("--steps", type=int, help="total training step target, including already completed steps")
+    parser.add_argument("--always-propose", action="store_true", help="make GEPA attempt a proposal even for a perfect parent")
     parser.add_argument("--account")
     parser.add_argument("--partition", default="commons")
     parser.add_argument("--dependency")
@@ -265,7 +274,13 @@ def main(argv=None):
     parser.add_argument("--no-auto-resume", action="store_true")
     args = parser.parse_args(argv)
     if args.resume and any((args.runtime, args.time, args.gres, args.mem, args.cpus, args.account, args.no_auto_resume)):
-        parser.error("--resume uses frozen settings; only --dependency and --time-min can be supplied with its run directory")
+        parser.error("--resume uses frozen settings; only scheduling and explicit step-extension options may change")
+    if args.steps is not None and args.steps < 1:
+        parser.error("--steps must be positive")
+    if args.always_propose and not args.steps:
+        parser.error("--always-propose requires an explicit --steps target")
+    if not args.resume and (args.steps or args.always_propose) and args.mode != "evolve":
+        parser.error("step targets apply only to evolution experiments")
     if args.time:
         wall_seconds(args.time)
     if args.time_min:
@@ -274,6 +289,8 @@ def main(argv=None):
         run = args.resume.expanduser().resolve()
         plan = json.loads((run / "plan.json").read_text())
         verify_snapshot(run, plan)
+        if args.steps:
+            plan = extend_run(run, args.steps, always_propose=args.always_propose)
         previous = json.loads((run / "job.json").read_text())
         metadata_root = Path(previous["metadata_root"])
     else:

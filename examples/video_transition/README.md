@@ -52,6 +52,20 @@ python examples/video_transition/utils/submit.py \
 
 The same step, video, judgment, and Slurm resume mechanisms below apply to the offline experiment.
 
+To extend a finished four-step run to **40 total steps**, preserving its training state and candidate pool:
+
+```bash
+python examples/video_transition/utils/submit.py \
+  --resume /absolute/path/to/evolve-run --steps 40 --always-propose
+```
+
+This archives the previous final report, adapter, final evaluation, and Git tag, then resumes at step 5 from the
+last training checkpoint. Existing video and judgment caches remain available. Root evaluation is reusable;
+final evaluation is run after the new target completes. `--always-propose` disables GEPA's perfect-parent skip
+so every remaining step attempts a proposal; acceptance and validation selection use the existing rules.
+For this one-training-task config, 40 steps correspond to 40 epochs. The allocation limit and saved
+`--time-min` backfill policy continue to apply.
+
 ## Model services and environments
 
 Use Hermit's Python 3.11+ environment for preparation, the controller API client, evaluation, and GEPA.
