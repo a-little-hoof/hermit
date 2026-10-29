@@ -106,22 +106,23 @@ def test_resume_reuses_paid_response_if_judgment_publish_was_interrupted(video, 
     assert result['score'] == 1
 
 
-def test_wrong_reported_sum_is_recovered_without_changing_decisions_or_raw_reply(video,tmp_path):
+@pytest.mark.parametrize('values,reported,expected', [([1]*10,9,1.0),([1]*4+[0]*6,10,0.4)])
+def test_wrong_reported_sum_is_recovered_without_changing_decisions_or_raw_reply(video,tmp_path,values,reported,expected):
     class WrongSumClient(Client):
         def chat(self,messages,**kwargs):
             self.calls.append(messages)
-            return {'content':json.dumps({'judgments':[1]*10,'sum':9})},Usage()
+            return {'content':json.dumps({'judgments':values,'sum':reported})},Usage()
     task={'id':'fixture','events':[{'time_s':0,'prompt':'old'},{'time_s':10,'prompt':'new'}], 'duration_s':20}
     client=WrongSumClient()
     destination=tmp_path/'scores'
     result=evaluate_with_recovery(task,video,settings(tmp_path),destination,client=client)
-    assert result['score']==1 and len(client.calls)==8 and result['new_queries']==8
+    assert result['score']==pytest.approx(expected) and len(client.calls)==8 and result['new_queries']==8
     assert len(result['aggregation_repairs'])==8
     for raw_path in destination.glob('switch-*.response.json'):
-        assert json.loads(json.loads(raw_path.read_text())['content'])['sum']==9
+        assert json.loads(json.loads(raw_path.read_text())['content'])['sum']==reported
         unit=json.loads(raw_path.with_name(raw_path.name.replace('.response.json','.json')).read_text())
-        assert unit['judgments']==[1]*10 and unit['sum']==10
-        assert unit['aggregation_repair']['reported_sum']==9
+        assert unit['judgments']==values and unit['sum']==sum(values)
+        assert unit['aggregation_repair']['reported_sum']==reported
     second=evaluate_with_recovery(task,video,settings(tmp_path),destination,client=client)
     assert len(client.calls)==8 and second['new_queries']==0
 
