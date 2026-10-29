@@ -33,6 +33,11 @@ creates a separate experiment directory and private runtime settings. The evalua
 [JSON Schema output constraints](https://docs.fireworks.ai/structured-responses/structured-response-formatting)
 to require exactly ten binary `judgments` plus `sum`; client validation still checks their consistency. This
 sampling configuration has a separate evaluation protocol label.
+The judge's ten binary decisions define the score. A recovery layer computes their sum locally when the model's
+redundant reported total is wrong. It verifies the protocol, rubric, and frame checksums, preserves the original
+API response byte for byte, and marks the derived metric cache with the reported and computed totals. Completed
+decisions are reused; the recovery makes no additional model calls for that metric. Invalid decision vectors and
+other evaluation errors still fail explicitly.
 
 `gepa/two_prompt.yaml` runs **four epochs / four training steps**. Training, validation, and final comparison use
 seeds 0, 1, and 2 of the same pair. These are seed holdouts for debugging one pair; they do not test unseen-prompt
@@ -141,8 +146,8 @@ blocks. The worker records requested times and actual condition-change times sep
 After a case finishes, evaluate its actual output:
 
 ```bash
-python examples/video_transition/utils/evaluate_video.py \
-  --config examples/video_transition/runtime.local.json \
+python examples/video_transition/utils/repair_arithmetic.py \
+  --runtime examples/video_transition/runtime.local.json \
   --manifest /path/to/baseline-run/longlive-07-pilot/manifest.json
 ```
 

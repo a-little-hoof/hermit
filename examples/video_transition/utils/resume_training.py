@@ -67,8 +67,10 @@ class VideoTrainer(Trainer):
 
         def checked(**arguments):
             result = original(**arguments)
-            if any(record.get("status") != "ok" for record in result["results"]):
-                raise RuntimeError("candidate rollout or judge failed; resume after resolving the error")
+            failed = [record for record in result["results"] if record.get("status") != "ok"]
+            if failed:
+                details = "; ".join(f"{r['id']}: {r.get('judge', {}).get('feedback', r.get('status'))}" for r in failed)
+                raise RuntimeError(f"candidate rollout or judge failed: {details}; resume after resolving the error")
             return result
         tool.fn = checked
         return tool

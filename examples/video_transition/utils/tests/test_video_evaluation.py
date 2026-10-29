@@ -11,6 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 from examples.video_transition.utils.evaluate_video import evaluate, extract_frames
 from examples.video_transition.utils.protocol import METRICS
+from examples.video_transition.utils.repair_arithmetic import evaluate_with_recovery
 
 
 @pytest.fixture
@@ -103,3 +104,32 @@ def test_resume_reuses_paid_response_if_judgment_publish_was_interrupted(video, 
     result=evaluate(task,video,config,tmp_path/'scores',client=client)
     assert len(client.calls) == 8 and result['new_queries'] == 8 - paid_calls
     assert result['score'] == 1
+
+
+def test_wrong_reported_sum_is_recovered_without_changing_decisions_or_raw_reply(video,tmp_path):
+    class WrongSumClient(Client):
+        def chat(self,messages,**kwargs):
+            self.calls.append(messages)
+            return {'content':json.dumps({'judgments':[1]*10,'sum':9})},Usage()
+    task={'id':'fixture','events':[{'time_s':0,'prompt':'old'},{'time_s':10,'prompt':'new'}], 'duration_s':20}
+    client=WrongSumClient()
+    destination=tmp_path/'scores'
+    result=evaluate_with_recovery(task,video,settings(tmp_path),destination,client=client)
+    assert result['score']==1 and len(client.calls)==8 and result['new_queries']==8
+    assert len(result['aggregation_repairs'])==8
+    for raw_path in destination.glob('switch-*.response.json'):
+        assert json.loads(json.loads(raw_path.read_text())['content'])['sum']==9
+        unit=json.loads(raw_path.with_name(raw_path.name.replace('.response.json','.json')).read_text())
+        assert unit['judgments']==[1]*10 and unit['sum']==10
+        assert unit['aggregation_repair']['reported_sum']==9
+    second=evaluate_with_recovery(task,video,settings(tmp_path),destination,client=client)
+    assert len(client.calls)==8 and second['new_queries']==0
+
+
+def test_arithmetic_recovery_does_not_accept_invalid_binary_evidence(video,tmp_path):
+    class InvalidClient(Client):
+        def chat(self,messages,**kwargs):
+            return {'content':json.dumps({'judgments':[True]*10,'sum':10})},Usage()
+    task={'id':'fixture','events':[{'time_s':0,'prompt':'old'},{'time_s':10,'prompt':'new'}], 'duration_s':20}
+    with pytest.raises(ValueError,match='integer'):
+        evaluate_with_recovery(task,video,settings(tmp_path),tmp_path/'scores',client=InvalidClient())

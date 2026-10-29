@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[3]))
-from examples.video_transition.utils.evaluate_video import evaluate
+from examples.video_transition.utils.repair_arithmetic import evaluate_with_recovery as evaluate
 from examples.video_transition.utils.remote import load_settings
 from hermit.io import atomic_json
 
