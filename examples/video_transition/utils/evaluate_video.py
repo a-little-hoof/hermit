@@ -123,7 +123,9 @@ def evaluate(task: dict, video: Path, settings: dict, destination: Path, client=
     digest = hashlib.sha256(json.dumps(rubrics["metrics"], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     if digest != rubrics["rubric_sha256"]:
         raise ValueError("rubric content disagrees with the recorded protocol checksum")
-    client = client or model_client(settings, "evaluator")
+    if client is None:
+        from examples.video_transition.utils.codex_evaluator import evaluator_client
+        client = evaluator_client(settings, destination)
     sampling = settings.get("evaluator_sampling") or {"temperature": 0.0, "max_tokens": 2048}
     destination.mkdir(parents=True, exist_ok=True)
     jobs = []
@@ -148,6 +150,9 @@ def evaluate(task: dict, video: Path, settings: dict, destination: Path, client=
                   for name in ("evaluate_video.py", "protocol.py", "remote.py"))).hexdigest(),
               "sampling": sampling, "image_preprocessing": "native-resolution JPEG quality 95, nearest decoded PTS",
               "task": task}
+    if getattr(client, "transport", None) == "codex-exec":
+        config["client_config"] = client.extra_body
+        config["client_code_sha256"] = hashlib.sha256(Path(__file__).with_name("codex_evaluator.py").read_bytes()).hexdigest()
     fingerprint = hashlib.sha256(json.dumps(config, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     atomic_json(destination / "protocol.json", config)
 
